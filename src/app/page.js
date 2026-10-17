@@ -23,10 +23,29 @@ import {
   Zap,
   Activity,
   Send,
-  Sparkles
+  Sparkles,
+  LogOut,
+  User,
+  ShieldAlert
 } from "lucide-react";
+import {
+  verifyAdminCredentials,
+  saveSession,
+  checkSession,
+  clearSession
+} from "@/lib/auth";
 
 export default function Home() {
+  // Authentication states
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [loginId, setLoginId] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [currentAdminId, setCurrentAdminId] = useState("admin");
+
+  // Database & Key states
   const [keys, setKeys] = useState({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -34,6 +53,27 @@ export default function Home() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [dbConnected, setDbConnected] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+
+  // Form states - Custom duration & manual device input
+  const [customKey, setCustomKey] = useState("");
+  const [durationValue, setDurationValue] = useState(30);
+  const [durationUnit, setDurationUnit] = useState("days"); // "minutes", "hours", "days", "weeks", "months", "lifetime"
+  const [deviceLimit, setDeviceLimit] = useState(1);
+  const [customerNote, setCustomerNote] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [generatedSuccessKey, setGeneratedSuccessKey] = useState(null);
+
+  // Check authentication session on mount
+  useEffect(() => {
+    const session = checkSession();
+    if (session.valid) {
+      setIsAuthenticated(true);
+      setCurrentAdminId(session.adminId || "admin");
+    } else {
+      setIsAuthenticated(false);
+    }
+    setAuthChecking(false);
+  }, []);
 
   // Keep a ticking clock on client side
   useEffect(() => {
@@ -44,17 +84,10 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  // Form states
-  const [customKey, setCustomKey] = useState("");
-  const [durationPreset, setDurationPreset] = useState("30d");
-  const [customDateTime, setCustomDateTime] = useState("");
-  const [deviceLimit, setDeviceLimit] = useState("1");
-  const [customerNote, setCustomerNote] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [generatedSuccessKey, setGeneratedSuccessKey] = useState(null);
-
-  // Listen to Firebase RTDB keys in realtime
+  // Listen to Firebase RTDB keys in realtime only when authenticated
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     const keysRef = ref(db, "keys");
     const unsubscribe = onValue(
       keysRef,
@@ -75,7 +108,39 @@ export default function Home() {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [isAuthenticated]);
+
+  // Login handler
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoggingIn(true);
+
+    try {
+      const isValid = await verifyAdminCredentials(loginId, loginPass);
+      if (isValid) {
+        saveSession(loginId.trim());
+        setIsAuthenticated(true);
+        setCurrentAdminId(loginId.trim());
+        setLoginPass("");
+      } else {
+        setLoginError("⚠️ Invalid Admin ID or Password. Access Denied!");
+      }
+    } catch (err) {
+      setLoginError("Verification failed: " + err.message);
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  // Logout handler
+  const handleLogout = () => {
+    clearSession();
+    setIsAuthenticated(false);
+    setLoginId("");
+    setLoginPass("");
+    setLoginError("");
+  };
 
   // Helper to generate a 10-character random key like "CDS544SDF9"
   const generateRandomKey = (length = 10) => {
@@ -91,55 +156,75 @@ export default function Home() {
     setCustomKey(generateRandomKey(10));
   };
 
-  // Calculate expiry timestamp
+  // Calculate dynamic expiry timestamp based on number & unit
   const calculateExpiry = () => {
     const now = Date.now();
-    switch (durationPreset) {
-      case "1h":
-        return now + 1 * 60 * 60 * 1000;
-      case "12h":
-        return now + 12 * 60 * 60 * 1000;
-      case "24h":
-        return now + 24 * 60 * 60 * 1000;
-      case "3d":
-        return now + 3 * 24 * 60 * 60 * 1000;
-      case "7d":
-        return now + 7 * 24 * 60 * 60 * 1000;
-      case "15d":
-        return now + 15 * 24 * 60 * 60 * 1000;
-      case "30d":
-        return now + 30 * 24 * 60 * 60 * 1000;
-      case "90d":
-        return now + 90 * 24 * 60 * 60 * 1000;
-      case "365d":
-        return now + 365 * 24 * 60 * 60 * 1000;
+    const val = Math.max(1, parseInt(durationValue, 10) || 1);
+    switch (durationUnit) {
+      case "minutes":
+        return now + val * 60 * 1000;
+      case "hours":
+        return now + val * 60 * 60 * 1000;
+      case "days":
+        return now + val * 24 * 60 * 60 * 1000;
+      case "weeks":
+        return now + val * 7 * 24 * 60 * 60 * 1000;
+      case "months":
+        return now + val * 30 * 24 * 60 * 60 * 1000;
       case "lifetime":
         return now + 3650 * 24 * 60 * 60 * 1000; // ~10 years
-      case "custom":
-        if (customDateTime) {
-          const parsed = new Date(customDateTime).getTime();
-          return isNaN(parsed) ? now + 30 * 24 * 60 * 60 * 1000 : parsed;
-        }
-        return now + 30 * 24 * 60 * 60 * 1000;
       default:
-        return now + 30 * 24 * 60 * 60 * 1000;
+        return now + val * 24 * 60 * 60 * 1000;
     }
   };
 
-  const getDurationLabel = (preset) => {
-    switch (preset) {
-      case "1h": return "1 Hour (Trial)";
-      case "12h": return "12 Hours";
-      case "24h": return "24 Hours (1 Day)";
-      case "3d": return "3 Days";
-      case "7d": return "7 Days (1 Week)";
-      case "15d": return "15 Days";
-      case "30d": return "30 Days (1 Month)";
-      case "90d": return "90 Days (3 Months)";
-      case "365d": return "1 Year (Annual)";
-      case "lifetime": return "Lifetime VIP";
-      case "custom": return "Custom Date";
-      default: return preset;
+  // Human readable label for duration
+  const getDurationLabel = () => {
+    if (durationUnit === "lifetime") return "Lifetime VIP";
+    const val = Math.max(1, parseInt(durationValue, 10) || 1);
+    const unitNames = {
+      minutes: val === 1 ? "1 Minute" : `${val} Minutes`,
+      hours: val === 1 ? "1 Hour" : `${val} Hours`,
+      days: val === 1 ? "1 Day" : `${val} Days`,
+      weeks: val === 1 ? "1 Week" : `${val} Weeks`,
+      months: val === 1 ? "1 Month" : `${val} Months`,
+    };
+    return unitNames[durationUnit] || `${val} ${durationUnit}`;
+  };
+
+  // Safe clipboard helper
+  const copyToClipboard = (text) => {
+    if (!text) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {
+          fallbackCopyText(text);
+        });
+      } else {
+        fallbackCopyText(text);
+      }
+      setCopiedKey(text);
+      setTimeout(() => setCopiedKey(null), 2500);
+    } catch (err) {
+      fallbackCopyText(text);
+      setCopiedKey(text);
+      setTimeout(() => setCopiedKey(null), 2500);
+    }
+  };
+
+  const fallbackCopyText = (text) => {
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    } catch (e) {
+      console.warn("Fallback copy failed", e);
     }
   };
 
@@ -151,6 +236,9 @@ export default function Home() {
     const finalKey = (customKey.trim() || generateRandomKey(10)).toUpperCase();
     const expiresAt = calculateExpiry();
     const now = Date.now();
+    const label = getDurationLabel();
+    const noteText = customerNote.trim();
+    const parsedDevices = Math.max(1, parseInt(deviceLimit, 10) || 1);
 
     const keyData = {
       key: finalKey,
@@ -158,12 +246,14 @@ export default function Home() {
       createdAt: now,
       expiresAt: expiresAt,
       expiresAtFormatted: new Date(expiresAt).toLocaleString(),
-      durationPreset: durationPreset,
-      durationLabel: getDurationLabel(durationPreset),
-      deviceLimit: parseInt(deviceLimit, 10) || 1,
-      boundDeviceId: "", // Bound upon first login
+      durationValue: durationUnit === "lifetime" ? 0 : parseInt(durationValue, 10) || 1,
+      durationUnit: durationUnit,
+      durationLabel: label,
+      deviceLimit: parsedDevices,
+      boundDeviceId: "", // Bound upon Android device login
       boundDeviceModel: "",
-      note: customerNote.trim() || "VIP Member",
+      note: noteText || "VIP Member",
+      telegramId: noteText || "", // Synced for Lua app header
       lastLoginAt: null
     };
 
@@ -172,7 +262,6 @@ export default function Home() {
       setGeneratedSuccessKey(keyData);
       setCustomKey("");
       setCustomerNote("");
-      // Safely auto-copy without crashing on HTTP / mobile contexts
       copyToClipboard(finalKey);
     } catch (err) {
       alert("Error saving key: " + err.message);
@@ -195,7 +284,7 @@ export default function Home() {
 
   // Reset bound device
   const resetDeviceBinding = async (keyString) => {
-    if (confirm(`Reset device binding for key ${keyString}? The user can re-bind on a new device.`)) {
+    if (confirm(`Reset device HWID binding for key ${keyString}? The user can re-bind on their new Android device.`)) {
       try {
         await update(ref(db, `keys/${keyString}`), {
           boundDeviceId: "",
@@ -233,90 +322,176 @@ export default function Home() {
     }
   };
 
-  const fallbackCopyText = (text) => {
-    try {
-      const textArea = document.createElement("textarea");
-      textArea.value = text;
-      textArea.style.position = "fixed";
-      textArea.style.left = "-9999px";
-      textArea.style.top = "-9999px";
-      textArea.setAttribute("readonly", "");
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      return true;
-    } catch (e) {
-      console.warn("Fallback copy failed:", e);
-      return false;
-    }
-  };
-
-  const copyToClipboard = (text) => {
-    if (!text) return;
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).catch(() => {
-          fallbackCopyText(text);
-        });
-      } else {
-        fallbackCopyText(text);
-      }
-      setCopiedKey(text);
-      setTimeout(() => setCopiedKey(null), 2500);
-    } catch (err) {
-      fallbackCopyText(text);
-      setCopiedKey(text);
-      setTimeout(() => setCopiedKey(null), 2500);
-    }
-  };
-
   // Process keys list and statistics
   const now = currentTime || 0;
-  const keysArray = Object.values(keys || {}).map((k) => {
+  const keyList = Object.entries(keys || {}).map(([key, data]) => {
+    const k = data || {};
     const isExpired = k.expiresAt && now > 0 && k.expiresAt < now;
-    let computedStatus = k.status;
-    if (k.status === "active" && isExpired) {
+    let computedStatus = k.status || "active";
+    if (computedStatus === "active" && isExpired) {
       computedStatus = "expired";
     }
+
     return {
+      key,
       ...k,
       computedStatus,
       isExpired
     };
   });
 
-  const totalKeys = keysArray.length;
-  const activeKeys = keysArray.filter((k) => k.computedStatus === "active").length;
-  const expiredKeys = keysArray.filter((k) => k.computedStatus === "expired").length;
-  const boundDevices = keysArray.filter((k) => k.boundDeviceId && k.boundDeviceId !== "").length;
+  const totalKeys = keyList.length;
+  const activeKeys = keyList.filter((k) => k.computedStatus === "active").length;
+  const expiredKeys = keyList.filter((k) => k.computedStatus === "expired").length;
+  const revokedKeys = keyList.filter((k) => k.status === "revoked").length;
 
-  const filteredKeys = keysArray.filter((k) => {
-    const matchesSearch =
-      k.key.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (k.note && k.note.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (k.boundDeviceId && k.boundDeviceId.toLowerCase().includes(searchTerm.toLowerCase()));
-
-    if (!matchesSearch) return false;
-    if (statusFilter === "all") return true;
-    if (statusFilter === "active") return k.computedStatus === "active";
-    if (statusFilter === "expired") return k.computedStatus === "expired";
-    if (statusFilter === "revoked") return k.status === "revoked";
-    if (statusFilter === "bound") return Boolean(k.boundDeviceId);
-    return true;
-  });
+  // Filter and search
+  const filteredKeys = keyList
+    .filter((k) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "active") return k.computedStatus === "active";
+      if (statusFilter === "expired") return k.computedStatus === "expired";
+      if (statusFilter === "revoked") return k.status === "revoked";
+      if (statusFilter === "bound") return Boolean(k.boundDeviceId);
+      return true;
+    })
+    .filter((k) => {
+      if (!searchTerm) return true;
+      const term = searchTerm.toLowerCase();
+      return (
+        k.key.toLowerCase().includes(term) ||
+        (k.note && k.note.toLowerCase().includes(term)) ||
+        (k.telegramId && k.telegramId.toLowerCase().includes(term)) ||
+        (k.boundDeviceId && k.boundDeviceId.toLowerCase().includes(term))
+      );
+    })
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   const formatRemainingTime = (expiresAt) => {
+    if (!expiresAt) return "Lifetime";
     const diff = expiresAt - now;
     if (diff <= 0) return "Expired";
-    const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-    const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-    const mins = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
-    if (days > 0) return `${days}d ${hours}h left`;
-    if (hours > 0) return `${hours}h ${mins}m left`;
-    return `${mins}m left`;
+    const totalSec = Math.floor(diff / 1000);
+    const d = Math.floor(totalSec / 86400);
+    const h = Math.floor((totalSec % 86400) / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+
+    if (d > 0) return `${d}d ${h}h remaining`;
+    if (h > 0) return `${h}h ${m}m remaining`;
+    return `${m}m remaining`;
   };
 
+  // ========================================================
+  // RENDER: INITIAL CHECKING / LOADING
+  // ========================================================
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-[#070b12] text-slate-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <RefreshCw className="w-8 h-8 animate-spin text-cyan-400" />
+          <span className="text-xs text-slate-400 font-mono">Verifying security session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================================
+  // RENDER: ADMIN LOGIN PAGE (DISPLAYED WHEN NOT LOGGED IN)
+  // ========================================================
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#070b12] text-slate-100 flex flex-col justify-center items-center px-4 py-12 relative overflow-hidden">
+        {/* Glow ambient background */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="w-full max-w-md relative z-10">
+          <div className="bg-slate-900/85 border border-slate-800/90 backdrop-blur-2xl rounded-3xl p-8 shadow-2xl shadow-cyan-950/20">
+            {/* Brand Header */}
+            <div className="flex flex-col items-center text-center mb-7">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-cyan-500 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/25 ring-2 ring-cyan-400/40 mb-4">
+                <Lock className="w-8 h-8" />
+              </div>
+              <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+                LEXXA VIP <span className="text-cyan-400 text-sm font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800">ADMIN</span>
+              </h1>
+              <p className="text-xs text-slate-400 mt-1.5">
+                License Key Control Center — Admin Verification Required
+              </p>
+            </div>
+
+            {/* Error banner */}
+            {loginError && (
+              <div className="mb-5 p-3.5 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            {/* Login form */}
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Admin ID
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value)}
+                    placeholder="Enter Admin ID (default: admin)"
+                    required
+                    autoFocus
+                    className="w-full bg-slate-950/80 border border-slate-700/80 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    placeholder="Enter Password (default: admin123)"
+                    required
+                    className="w-full bg-slate-950/80 border border-slate-700/80 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loggingIn}
+                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold py-3 px-4 rounded-xl text-sm transition-all shadow-[0_0_20px_rgba(6,182,212,0.3)] disabled:opacity-50 flex items-center justify-center gap-2 mt-2"
+              >
+                {loggingIn ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Verifying Credentials...
+                  </>
+                ) : (
+                  <>Unlock Control Center</>
+                )}
+              </button>
+            </form>
+          </div>
+
+          <div className="text-center text-[11px] text-slate-500 mt-5">
+            Synchronized with Firebase Realtime Database
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================================
+  // RENDER: MAIN CONTROL DASHBOARD (WHEN AUTHENTICATED)
+  // ========================================================
   return (
     <div className="min-h-screen text-slate-100 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
       {/* Top Navigation / Brand */}
@@ -337,26 +512,34 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-stretch sm:self-auto justify-end">
+        <div className="flex items-center gap-2.5 self-stretch sm:self-auto justify-end flex-wrap">
+          {/* Admin Identity Badge */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyan-950/40 border border-cyan-800/60 text-xs text-cyan-300">
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="font-mono">{currentAdminId}</span>
+          </div>
+
+          {/* Database status */}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-xs">
             <span
-              className={`w-2.5 h-2.5 rounded-full ${dbConnected ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-rose-500"
-                }`}
+              className={`w-2.5 h-2.5 rounded-full ${
+                dbConnected ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-rose-500"
+              }`}
             />
             <span className="text-slate-300 font-mono">
               {dbConnected ? "RTDB Connected" : "Connecting..."}
             </span>
           </div>
 
-          <a
-            href={`https://console.firebase.google.com/project/${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "tg-hack-1c3ca"}/database`}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition-colors border border-slate-700"
+          {/* Logout Button */}
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-medium border border-rose-500/30 transition-colors"
+            title="Log out of Control Center"
           >
-            <span>Firebase Console</span>
-            <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-          </a>
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Logout</span>
+          </button>
         </div>
       </header>
 
@@ -379,7 +562,7 @@ export default function Home() {
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="mt-2 text-2xl sm:text-3xl font-black text-emerald-400">{activeKeys}</div>
-          <div className="mt-1 text-xs text-slate-500">Valid & non-expired access</div>
+          <div className="mt-1 text-xs text-slate-500">Currently valid for login</div>
         </div>
 
         <div className="glass-panel rounded-2xl p-4 sm:p-5 relative overflow-hidden group">
@@ -389,131 +572,134 @@ export default function Home() {
             <Clock className="w-4 h-4 text-rose-400" />
           </div>
           <div className="mt-2 text-2xl sm:text-3xl font-black text-rose-400">{expiredKeys}</div>
-          <div className="mt-1 text-xs text-slate-500">Require subscription renewal</div>
+          <div className="mt-1 text-xs text-slate-500">Auto-stopped & logged out</div>
         </div>
 
         <div className="glass-panel rounded-2xl p-4 sm:p-5 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-all" />
+          <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-all" />
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Bound HWIDs</span>
-            <Smartphone className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Revoked Keys</span>
+            <AlertCircle className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="mt-2 text-2xl sm:text-3xl font-black text-indigo-300">{boundDevices}</div>
-          <div className="mt-1 text-xs text-slate-500">Locked to Android hardware</div>
+          <div className="mt-2 text-2xl sm:text-3xl font-black text-amber-400">{revokedKeys}</div>
+          <div className="mt-1 text-xs text-slate-500">Admin blocked access</div>
         </div>
       </div>
 
-      {/* Main Grid: Generator Card + Key List */}
+      {/* Main Grid: Generator (Left) + Table (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Key Generator */}
         <div className="lg:col-span-5 flex flex-col gap-6">
-          <div className="glass-panel-glow rounded-2xl p-5 sm:p-6">
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+          <div className="glass-panel rounded-2xl p-5 sm:p-6 relative">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-cyan-400" />
-                <h2 className="text-lg font-bold text-white">Create New Key</h2>
+                <h2 className="text-lg font-bold text-white">Generate VIP License Key</h2>
               </div>
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">
-                VIP Access
+              <span className="text-[11px] font-mono text-cyan-300 px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800">
+                AES-Format
               </span>
             </div>
 
-            <form onSubmit={handleCreateKey} className="space-y-4">
-              {/* Custom or Random Key */}
+            <form onSubmit={handleCreateKey} className="mt-5 space-y-4">
+              {/* Custom Key / Auto Key */}
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                    License Key String
-                  </label>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Custom Key String (Optional)</span>
                   <button
                     type="button"
                     onClick={handleRandomize}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-mono transition-colors"
+                    className="text-cyan-400 hover:text-cyan-300 text-xs font-medium flex items-center gap-1 transition-colors"
                   >
-                    <RefreshCw className="w-3 h-3" /> Randomize
+                    <RefreshCw className="w-3 h-3" /> Auto-Random
                   </button>
-                </div>
+                </label>
                 <div className="relative">
                   <input
                     type="text"
                     value={customKey}
-                    onChange={(e) => setCustomKey(e.target.value)}
-                    placeholder="Custom key (or leave blank to auto-generate)"
-                    className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400 transition-all uppercase"
+                    onChange={(e) => setCustomKey(e.target.value.toUpperCase())}
+                    placeholder="Auto-generated if left blank (e.g. VIP-ABCD123)"
+                    className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400"
                   />
                 </div>
               </div>
 
-              {/* Expiry Duration Selector */}
+              {/* Dynamic Number of Time & Unit Selector (No hardcoded pre-written buttons) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                  Duration & Expiry
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Key Validity Duration</span>
+                  <span className="text-cyan-400 font-mono text-[11px]">{getDurationLabel()}</span>
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { id: "1h", label: "1 Hour" },
-                    { id: "24h", label: "24 Hours" },
-                    { id: "3d", label: "3 Days" },
-                    { id: "7d", label: "7 Days" },
-                    { id: "30d", label: "30 Days" },
-                    { id: "90d", label: "90 Days" },
-                    { id: "365d", label: "1 Year" },
-                    { id: "lifetime", label: "Lifetime" },
-                    { id: "custom", label: "Custom" }
-                  ].map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => setDurationPreset(preset.id)}
-                      className={`text-xs font-medium py-2 px-2.5 rounded-xl border transition-all ${durationPreset === preset.id
-                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
-                          : "bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-                        }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-
-                {durationPreset === "custom" && (
-                  <div className="mt-3">
+                <div className="grid grid-cols-12 gap-2">
+                  {/* Number of Time Input */}
+                  <div className="col-span-5">
                     <input
-                      type="datetime-local"
-                      value={customDateTime}
-                      onChange={(e) => setCustomDateTime(e.target.value)}
-                      className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-cyan-400"
-                      required
+                      type="number"
+                      min="1"
+                      max="9999"
+                      disabled={durationUnit === "lifetime"}
+                      value={durationUnit === "lifetime" ? "" : durationValue}
+                      onChange={(e) => setDurationValue(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      placeholder={durationUnit === "lifetime" ? "∞" : "e.g. 5"}
+                      className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400 disabled:opacity-40"
+                      required={durationUnit !== "lifetime"}
                     />
                   </div>
-                )}
+
+                  {/* Unit Selector: Minutes, Hours, Days, Weeks, Months, Lifetime */}
+                  <div className="col-span-7">
+                    <select
+                      value={durationUnit}
+                      onChange={(e) => setDurationUnit(e.target.value)}
+                      className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                    >
+                      <option value="minutes">Minutes</option>
+                      <option value="hours">Hours</option>
+                      <option value="days">Days</option>
+                      <option value="weeks">Weeks</option>
+                      <option value="months">Months</option>
+                      <option value="lifetime">Lifetime (No Expiry)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
-              {/* Device Limit / Binding */}
+              {/* Number of Devices (Manual numeric entry) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                  Device Hardware Lock (HWID)
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Number of Allowed Devices (HWID)</span>
+                  <span className="text-[11px] text-cyan-400 font-normal">Manual Input</span>
                 </label>
-                <select
-                  value={deviceLimit}
-                  onChange={(e) => setDeviceLimit(e.target.value)}
-                  className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-400"
-                >
-                  <option value="1">1 Device (Locked to first Android device)</option>
-                  <option value="2">2 Devices</option>
-                  <option value="999">Unlimited Devices (No HWID Lock)</option>
-                </select>
+                <div className="relative">
+                  <Smartphone className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="number"
+                    min="1"
+                    max="999"
+                    value={deviceLimit}
+                    onChange={(e) => setDeviceLimit(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    placeholder="Enter device limit (e.g. 1, 2, or 5)"
+                    className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                    required
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Enter 1 for single phone lock, or 2+ to allow the same key across multiple devices.
+                </p>
               </div>
 
-              {/* Customer Note / Username */}
+              {/* Customer Note / Telegram ID (Displayed at top of Lua App) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                  User Note / Telegram ID
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>User Note / Telegram ID</span>
+                  <span className="text-[11px] text-emerald-400 font-normal">Shows at top of Lua App</span>
                 </label>
                 <input
                   type="text"
                   value={customerNote}
                   onChange={(e) => setCustomerNote(e.target.value)}
-                  placeholder="e.g. @rahul_vip or Buyer #1024"
+                  placeholder="e.g. @rahul_vip or Buyer #102"
                   className="w-full bg-slate-900/90 border border-slate-700 focus:border-cyan-400 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400"
                 />
               </div>
@@ -522,11 +708,11 @@ export default function Home() {
               <button
                 type="submit"
                 disabled={generating}
-                className="w-full btn-gradient rounded-xl py-3 px-4 font-bold text-sm tracking-wide flex items-center justify-center gap-2 mt-4"
+                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold rounded-xl py-3 px-4 text-sm tracking-wide flex items-center justify-center gap-2 mt-4 transition-all shadow-[0_0_20px_rgba(6,182,212,0.3)] disabled:opacity-50"
               >
                 {generating ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" /> Saving to Firebase...
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Storing to Firebase...
                   </>
                 ) : (
                   <>
@@ -561,27 +747,32 @@ export default function Home() {
                 </div>
                 <div className="text-[11px] text-slate-400 mt-2 flex justify-between">
                   <span>Expires: {generatedSuccessKey.expiresAtFormatted}</span>
-                  <span>HWID: Ready to bind</span>
+                  <span>Devices: {generatedSuccessKey.deviceLimit} Allowed</span>
                 </div>
+                {generatedSuccessKey.note && (
+                  <div className="text-[11px] text-emerald-400 mt-1">
+                    App User Title: {generatedSuccessKey.note}
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* Quick Info / REST Endpoint Box */}
+          {/* Quick Info Box */}
           <div className="glass-panel rounded-2xl p-5 text-xs text-slate-400">
             <div className="flex items-center gap-2 text-slate-200 font-semibold mb-2">
               <Activity className="w-4 h-4 text-cyan-400" />
               <span>Realtime REST Verification</span>
             </div>
             <p className="mb-2">
-              The Lua Android app verifies keys directly via the Firebase RTDB REST API:
+              The Lua Android app verifies keys directly via Firebase RTDB:
             </p>
             <div className="p-2.5 bg-slate-950/90 rounded-lg border border-slate-800 font-mono text-[11px] text-cyan-300 break-all select-all">
               {process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL || "https://<your-rtdb>.firebasedatabase.app"}/keys/&lt;KEY&gt;.json
             </div>
             <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between">
-              <span>Automatic HWID binding on 1st login</span>
-              <span className="text-emerald-400 font-medium">Zero-lag sync</span>
+              <span>Auto HWID binding on login</span>
+              <span className="text-emerald-400 font-medium">Real-time sync</span>
             </div>
           </div>
         </div>
@@ -626,10 +817,11 @@ export default function Home() {
                 <button
                   key={f.id}
                   onClick={() => setStatusFilter(f.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${statusFilter === f.id
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                    statusFilter === f.id
                       ? "bg-slate-700 text-white font-semibold"
                       : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
-                    }`}
+                  }`}
                 >
                   {f.label}
                 </button>
@@ -674,6 +866,11 @@ export default function Home() {
                               <Copy className="w-3.5 h-3.5 text-slate-500 hover:text-slate-300" />
                             )}
                           </button>
+                          {item.durationLabel && (
+                            <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                              {item.durationLabel}
+                            </span>
+                          )}
                         </div>
 
                         {/* Status Badge */}
@@ -697,7 +894,7 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {/* Details row: expiry, countdown, note */}
+                      {/* Details row: expiry, countdown, note, devices */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/60">
                         <div>
                           <div className="flex items-center gap-1.5 text-slate-300">
@@ -713,19 +910,19 @@ export default function Home() {
                           <div className="flex items-center gap-1.5 text-slate-300">
                             <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
                             <span>
-                              HWID:{" "}
+                              HWID ({item.deviceLimit || 1} Device{item.deviceLimit > 1 ? "s" : ""}):{" "}
                               {item.boundDeviceId ? (
                                 <span className="font-mono text-[11px] text-indigo-300">
-                                  {item.boundDeviceId.substring(0, 10)}...
+                                  {item.boundDeviceId.length > 15 ? `${item.boundDeviceId.substring(0, 15)}...` : item.boundDeviceId}
                                 </span>
                               ) : (
                                 <span className="text-slate-500 italic">Unbound</span>
                               )}
                             </span>
                           </div>
-                          {item.note && (
-                            <div className="mt-1 text-[11px] text-slate-400 truncate">
-                              Note: {item.note}
+                          {(item.note || item.telegramId) && (
+                            <div className="mt-1 text-[11px] text-emerald-400 truncate">
+                              User: {item.telegramId || item.note}
                             </div>
                           )}
                         </div>
@@ -756,41 +953,46 @@ export default function Home() {
                           >
                             +30 Days
                           </button>
+                        </div>
 
+                        <div className="flex items-center gap-1.5">
                           {/* Reset HWID button */}
                           {item.boundDeviceId && (
                             <button
                               onClick={() => resetDeviceBinding(item.key)}
-                              className="px-2 py-1 rounded bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-800/80 text-indigo-300 text-[11px] transition-colors flex items-center gap-1"
-                              title="Reset bound device"
+                              className="px-2.5 py-1 rounded bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[11px] transition-colors flex items-center gap-1"
+                              title="Reset HWID binding"
                             >
-                              <Unlock className="w-3 h-3" /> Reset HWID
+                              <Smartphone className="w-3 h-3" />
+                              <span>Reset HWID</span>
                             </button>
                           )}
-                        </div>
 
-                        <div className="flex items-center gap-1.5">
-                          {/* Suspend / Resume toggle */}
+                          {/* Revoke / Unrevoke button */}
                           <button
                             onClick={() => toggleKeyStatus(item.key, item.status)}
-                            className={`p-1.5 rounded transition-colors ${item.status === "active"
-                                ? "bg-amber-950/60 hover:bg-amber-900 text-amber-300 border border-amber-800/70"
-                                : "bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-800/70"
-                              }`}
-                            title={item.status === "active" ? "Revoke / Suspend" : "Re-activate"}
+                            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                              item.status === "revoked"
+                                ? "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                : "bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                            }`}
                           >
-                            {item.status === "active" ? (
-                              <Lock className="w-3.5 h-3.5" />
+                            {item.status === "revoked" ? (
+                              <>
+                                <Unlock className="w-3 h-3" /> Activate
+                              </>
                             ) : (
-                              <Unlock className="w-3.5 h-3.5" />
+                              <>
+                                <Lock className="w-3 h-3" /> Revoke
+                              </>
                             )}
                           </button>
 
-                          {/* Delete */}
+                          {/* Delete button */}
                           <button
                             onClick={() => handleDeleteKey(item.key)}
-                            className="p-1.5 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/70 transition-colors"
-                            title="Delete Key"
+                            className="p-1.5 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors"
+                            title="Delete Key Permanently"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
