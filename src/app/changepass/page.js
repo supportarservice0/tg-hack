@@ -70,21 +70,25 @@ export default function ChangePassPage() {
     setSubmitting(true);
     try {
       // 1. Verify current credentials against Firebase RTDB
-      const isValid = await verifyAdminCredentials(currentId, currentPass);
-      if (!isValid) {
+      const authResult = await verifyAdminCredentials(currentId, currentPass);
+      if (!authResult.valid) {
         setErrorMsg("Incorrect current Admin ID or Password. Verification failed!");
         setSubmitting(false);
         return;
       }
 
-      // 2. Update to new credentials in Firebase RTDB
+      // 2. Update to new credentials in Firebase RTDB (updates authEpoch and revokes all devices)
       await updateAdminConfig(newId.trim(), newPass);
 
-      setSuccessMsg("✓ Admin credentials updated and saved to Firebase successfully!");
+      setSuccessMsg("✓ Password changed successfully! All active sessions across ALL devices have been immediately logged out. Redirecting to login...");
       setCurrentPass("");
       setNewPass("");
       setConfirmPass("");
-      setCurrentId(newId.trim());
+
+      // Redirect to login page so admin logs in with new credentials
+      setTimeout(() => {
+        router.push("/");
+      }, 2200);
     } catch (err) {
       setErrorMsg(err.message || "Failed to update credentials. Please check Firebase connection.");
     } finally {

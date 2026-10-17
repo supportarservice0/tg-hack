@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
-import { ref, onValue, set, update, remove } from "firebase/database";
+import { ref, onValue, set, update, remove, get } from "firebase/database";
 import {
   Key,
   ShieldCheck,
@@ -32,7 +32,8 @@ import {
   verifyAdminCredentials,
   saveSession,
   checkSession,
-  clearSession
+  clearSession,
+  getStoredSession
 } from "@/lib/auth";
 
 export default function Home() {
@@ -63,16 +64,96 @@ export default function Home() {
   const [generating, setGenerating] = useState(false);
   const [generatedSuccessKey, setGeneratedSuccessKey] = useState(null);
 
-  // Check authentication session on mount
+  // Realtime Firebase listener on admin_config:
+  // Forces immediate instant logout across ALL open devices if password is changed!
   useEffect(() => {
-    const session = checkSession();
-    if (session.valid) {
-      setIsAuthenticated(true);
-      setCurrentAdminId(session.adminId || "admin");
-    } else {
-      setIsAuthenticated(false);
-    }
-    setAuthChecking(false);
+    const adminConfigRef = ref(db, "admin_config");
+    
+    // Core function to check if current stored session is still valid against Firebase config
+    const enforceAuthAgainstConfig = (config) => {
+      const stored = getStoredSession();
+      if (!stored || !stored.adminId) {
+        setIsAuthenticated(false);
+        setAuthChecking(false);
+        return;
+      }
+
+      if (config && config.updatedAt) {
+        // If stored session does not have authEpoch, or was created BEFORE the last password update
+        if (!stored.authEpoch || config.updatedAt > stored.authEpoch) {
+          clearSession();
+          setIsAuthenticated(false);
+          setKeys({});
+          setLoginError("🔒 Admin password was changed. You have been automatically logged out from all devices. Please log in with the new password.");
+          setAuthChecking(false);
+          return;
+        }
+      }
+
+      // Check timeout (2 hours)
+      const now = Date.now();
+      if (stored.loginTime && now - stored.loginTime < 2 * 60 * 60 * 1000) {
+        setIsAuthenticated(true);
+        setCurrentAdminId(stored.adminId);
+      } else {
+        clearSession();
+        setIsAuthenticated(false);
+        setKeys({});
+      }
+      setAuthChecking(false);
+    };
+
+    // 1. Instant WebSocket push listener from Firebase RTDB
+    const unsubscribe = onValue(
+      adminConfigRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          enforceAuthAgainstConfig(snapshot.val());
+        } else {
+          enforceAuthAgainstConfig(null);
+        }
+      },
+      (error) => {
+        console.error("Firebase admin_config error:", error);
+        setAuthChecking(false);
+      }
+    );
+
+    // 2. Storage event listener to sync logout across all tabs on the same device immediately
+    const handleStorageChange = (e) => {
+      if (e.key === "lexxa_admin_session" || !e.newValue) {
+        const session = getStoredSession();
+        if (!session) {
+          setIsAuthenticated(false);
+          setKeys({});
+        }
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+
+    // 3. Tab focus & visibility listener (instantly detects password change if device was asleep/minimized)
+    const handleRecheck = async () => {
+      const stored = getStoredSession();
+      if (stored) {
+        try {
+          const snap = await get(ref(db, "admin_config"));
+          if (snap.exists()) {
+            enforceAuthAgainstConfig(snap.val());
+          }
+        } catch (e) {
+          console.warn("Visibility re-check failed:", e);
+        }
+      }
+    };
+    window.addEventListener("focus", handleRecheck);
+    document.addEventListener("visibilitychange", handleRecheck);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("focus", handleRecheck);
+      document.removeEventListener("visibilitychange", handleRecheck);
+    };
   }, []);
 
   // Keep a ticking clock on client side
@@ -117,9 +198,9 @@ export default function Home() {
     setLoggingIn(true);
 
     try {
-      const isValid = await verifyAdminCredentials(loginId, loginPass);
-      if (isValid) {
-        saveSession(loginId.trim());
+      const authResult = await verifyAdminCredentials(loginId, loginPass);
+      if (authResult.valid) {
+        saveSession(loginId.trim(), authResult.authEpoch);
         setIsAuthenticated(true);
         setCurrentAdminId(loginId.trim());
         setLoginPass("");
@@ -137,6 +218,7 @@ export default function Home() {
   const handleLogout = () => {
     clearSession();
     setIsAuthenticated(false);
+    setKeys({});
     setLoginId("");
     setLoginPass("");
     setLoginError("");
