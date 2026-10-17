@@ -340,9 +340,8 @@ export default function Home() {
         <div className="flex items-center gap-3 self-stretch sm:self-auto justify-end">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-xs">
             <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                dbConnected ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-rose-500"
-              }`}
+              className={`w-2.5 h-2.5 rounded-full ${dbConnected ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-rose-500"
+                }`}
             />
             <span className="text-slate-300 font-mono">
               {dbConnected ? "RTDB Connected" : "Connecting..."}
@@ -466,11 +465,10 @@ export default function Home() {
                       key={preset.id}
                       type="button"
                       onClick={() => setDurationPreset(preset.id)}
-                      className={`text-xs font-medium py-2 px-2.5 rounded-xl border transition-all ${
-                        durationPreset === preset.id
+                      className={`text-xs font-medium py-2 px-2.5 rounded-xl border transition-all ${durationPreset === preset.id
                           ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
                           : "bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-                      }`}
+                        }`}
                     >
                       {preset.label}
                     </button>
@@ -628,11 +626,10 @@ export default function Home() {
                 <button
                   key={f.id}
                   onClick={() => setStatusFilter(f.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                    statusFilter === f.id
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${statusFilter === f.id
                       ? "bg-slate-700 text-white font-semibold"
                       : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
-                  }`}
+                    }`}
                 >
                   {f.label}
                 </button>
@@ -776,11 +773,10 @@ export default function Home() {
                           {/* Suspend / Resume toggle */}
                           <button
                             onClick={() => toggleKeyStatus(item.key, item.status)}
-                            className={`p-1.5 rounded transition-colors ${
-                              item.status === "active"
+                            className={`p-1.5 rounded transition-colors ${item.status === "active"
                                 ? "bg-amber-950/60 hover:bg-amber-900 text-amber-300 border border-amber-800/70"
                                 : "bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-800/70"
-                            }`}
+                              }`}
                             title={item.status === "active" ? "Revoke / Suspend" : "Re-activate"}
                           >
                             {item.status === "active" ? (
